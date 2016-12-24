@@ -4,6 +4,7 @@ from zss import Node
 import pickle
 from collections import Counter
 from spacy.tokens.doc import Doc
+import copy
 import numpy as np
 
 def getEntropy(slot_lists):
@@ -16,11 +17,70 @@ def getEntropy(slot_lists):
     
     return H
 
-def dfs(num,match_res,len_p,d,nodes):
-    if num==len_p:
-        match_res.append(d.get(nodes[len_p-1]))
-        return 
+def getBackPattern(node,pattern,depth):
+    if depth==4:
+        #nothing
+        return
+    else:
+        curPnode = Node(node.lemma_+'|'+node.tag_+'|'+node.dep_+'|'+str(node.i))
+        if not pattern:
+            pattern = curPnode
+            pattern.nodes =[]
+            pattern.nodes.append(curPnode)
 
+        else:
+            original_parent = node.head
+            parent_label = original_parent.lemma_+'|'+original_parent.tag_+'|'+original_parent.dep_+'|'+str(original_parent.i)
+            inserted_Node = pattern.get(parent_label)
+            
+            inserted_Node.addkid(curPnode)
+            pattern.nodes.append(curPnode)
+            curPnode.parent = inserted_Node
+
+        if not node.children:
+            #nothing
+            #LCS(pattern,candicate_sent)
+            pass
+        else:
+            if depth==0:
+                pattern_list=[]
+                if list(node.children):
+                    for child in node.children:
+                        valued_pattern = copy.deepcopy(pattern)
+                        getBackPattern(child,valued_pattern,depth+1)
+                        pattern_list.append(valued_pattern)
+                else:
+                    pattern_list.append(pattern)
+                return pattern_list
+            else:
+                for child in node.children:
+                    getBackPattern(child,pattern,depth+1)
+
+def getBackEntropy(node):
+    pat = None
+    pat_list = getBackPattern(node,pat,0)
+
+    global spacy_sents
+    max_entropy=0
+    for bac_pat in pat_list:
+        slot_values=[]
+        for candicate_sent in spacy_sents:
+            matched,match_res = LCS(bac_pat,candicate_sent,True)
+            if matched:
+                slot_values.extend(match_res)
+        if slot_values:
+            cur_En = getEntropy(slot_values)
+            if cur_En>max_entropy:
+                max_entropy = cur_En
+    return max_entropy 
+    
+def dfs(num,match_res,len_p,d,nodes,back):
+    if num==len_p:
+        if back:
+            match_res.append(d.get(nodes[0]).head)
+        else:
+            match_res.append(d.get(nodes[len_p-1]))
+        return 
     pNode = nodes[num]
     
     pNode_parent = pNode.parent
@@ -30,11 +90,11 @@ def dfs(num,match_res,len_p,d,nodes):
     for sent_child in parent_matched.children:
         if unit_equal(pNode.label,sent_child):
             d[pNode] = sent_child
-            dfs(num+1,match_res,len_p,d,nodes)
+            dfs(num+1,match_res,len_p,d,nodes,back)
 
 
 
-def LCS(pattern,candicate_sent):
+def LCS(pattern,candicate_sent,back=False):
     label_proot = pattern.label
 
     root_match_tokens = [token for token in candicate_sent if unit_equal(label_proot,token) ]
@@ -49,7 +109,7 @@ def LCS(pattern,candicate_sent):
     
     for rmt in root_match_tokens:
         d[nodes[0]]= rmt
-        dfs(1,match_res,len_p,d,nodes)
+        dfs(1,match_res,len_p,d,nodes,back)
     
     if not match_res:
         matched = False
@@ -138,17 +198,19 @@ def getPattern(pattern,node,candidate_sents,prevH):
 
         if filtered_candicates:
             
-            curpH = getEntropy(slot_values)
-
+            curpH= getEntropy(slot_values)
+            curbpH = getBackEntropy(node)
             print('curpH:{},prevH:{}'.format(curpH,prevH))
+            print('curbpH:{}'.format(curbpH))
 
-            if curpH>prevH:
+            if curpH>prevH and curbpH>prevH:
                 #this node is argnode 
                 newpattern = None
 
                 global spacy_sents
-                
-                getPattern(newpattern,node,spacy_sents,startH)
+
+                if list(node.children):
+                    getPattern(newpattern,node,spacy_sents,startH)
             
             else:
                 #this node should be normal node
@@ -163,6 +225,13 @@ def getPattern(pattern,node,candidate_sents,prevH):
             inserted_Node.children.pop()
             pattern.nodes.pop()
 
+            if list(node.children):
+                global spacy_sents
+
+                newpattern = None
+
+                getPattern(newpattern,node,spacy_sents,startH)
+
 
                 
 
@@ -171,8 +240,6 @@ def getPattern(pattern,node,candidate_sents,prevH):
 if __name__ == '__main__':
     en_nlp = spacy.load('en')
     
-    en_doc = en_nlp('A few accessories such as a pair of sunglasses or silver loops on the wrist can add up to the romance sphere.')
-
     pattern_list = []
 
     docs=[]
@@ -187,19 +254,24 @@ if __name__ == '__main__':
     
     for doc in docs:
         spacy_sents.extend(list(doc.sents))
-             
-    for sent in en_doc.sents:
-        sr = sent.root
-        spattern = None
-        startH = 4.0 
-        getPattern(spattern,sr,spacy_sents,startH)
+ 
+    while True:
+        input_text = input("input a sent:\n")
+                
+        en_doc = en_nlp(input_text)
+    
+        for sent in en_doc.sents:
+            sr = sent.root
+            spattern = None
+            startH = 4.0 
+            getPattern(spattern,sr,spacy_sents,startH)
     
     #assert len(pattern_list)==1 
 
-    with open('/home/wpf/wiki/branch_entropy/example_pattern','wb') as f_out:
-        pickle.dump(pattern_list,f_out)
+    #with open('/home/wpf/wiki/branch_entropy/example_pattern','wb') as f_out:
+    #    pickle.dump(pattern_list,f_out)
 
-    for p in pattern_list:
-        print(p)
-        print('------------')
+        for p in pattern_list:
+            print(p)
+            print('------------')
     #print(pattern_list)
